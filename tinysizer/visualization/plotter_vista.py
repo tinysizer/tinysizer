@@ -545,43 +545,91 @@ class PyVistaMeshPlotter(QFrame):
                 line_cell_idx += 1
 
     #BUGGGGGGGGGY!
+
     def colorize_by_property(self, model_data):
-        # Build array to hold actual PID values for each cell
-        element_to_pid = np.full(self.mesh.n_cells, -1, dtype=int)  # Use -1 for missing
+    #Colorize mesh elements by their property IDs with unique colors
+        import matplotlib.colors as mcolors
+        import random
         
+        # Build array to hold actual PID values for each cell
+        element_to_pid = np.full(self.mesh.n_cells, -1, dtype=int)
         missing_elements = []
+        
+        # First pass - collect all unique PIDs from the model
+        all_pids = set()
+        for eid in self.element_to_cell_map.keys():
+            if eid in model_data.bdf.elements:
+                pid = model_data.bdf.elements[eid].pid
+                all_pids.add(pid)
+        
+        # Sort PIDs for consistent ordering
+        unique_pids = sorted(list(all_pids))
+        num_props = len(unique_pids)
+        print(f"Found {num_props} unique property IDs")
+        
+        # Create mapping from PID to color index
+        pid_to_index = {pid: idx for idx, pid in enumerate(unique_pids)}
+        
+        # Second pass - assign colors to elements
+        el_pid_data = []  # For CSV export
         for eid, cell_idx in self.element_to_cell_map.items():
             if eid in model_data.bdf.elements:
                 pid = model_data.bdf.elements[eid].pid
-                element_to_pid[cell_idx] = pid
+                color_idx = pid_to_index[pid]  # Get consistent color index
+                element_to_pid[cell_idx] = color_idx  # Store color index, not PID
+                
+                el_pid_data.append({
+                    "Element ID": eid,
+                    "Property ID": pid,
+                    "Color Index": color_idx,
+                    "Type": model_data.bdf.elements[eid].type
+                })
             else:
                 missing_elements.append(eid)
+                
+        # Create custom colormap with distinct colors
+        if num_props <= 10:
+            # Use tab10 for up to 10 properties
+            cmap = cm.get_cmap('tab10', num_props)
+        elif num_props <= 20:
+            # Use tab20 for up to 20 properties
+            cmap = cm.get_cmap('tab20', num_props)
+        else:
+            # Generate evenly spaced HSV colors
+            hsv_colors = []
+            golden_ratio = (1 + 5 ** 0.5) / 2
+            for i in range(num_props):
+                hue = (i * golden_ratio) % 1
+                hsv_colors.append((hue, 0.85, 0.9))
+            colors = [mcolors.hsv_to_rgb(hsv) for hsv in hsv_colors]
+        
+        # Create custom colormap
+        cmap = mcolors.ListedColormap(colors)
+        
+        # Store the color indices as scalars
+        self.mesh.cell_data["Property Index"] = element_to_pid
+        
+        # Clear and redraw
+        self.plotter.clear()
+        self.add_axes()
+        
+        # Add mesh with property colors
+        self.plotter.add_mesh(
+            self.mesh,
+            scalars="Property Index",
+            show_edges=True,
+            cmap=cmap,
+            show_scalar_bar=False,
+        )
+        # Export mapping data
+        df = pd.DataFrame(el_pid_data)
+        df.to_csv("element_property_mapping.csv", index=False)
         
         if missing_elements:
             print(f"Warning: {len(missing_elements)} elements not found in BDF")
         
-        # Get unique PIDs for colormap sizing
-        unique_pids = np.unique(element_to_pid[element_to_pid != -1])
-        print(f"Colorization -> unique PIDs: {len(unique_pids)}")
-        
-        # Store actual PID values as scalars
-        self.mesh.cell_data["Property ID"] = element_to_pid
-        
-        num_colors = len(unique_pids)
-        cmap = cm.get_cmap("tab20", num_colors)
-
-        self.plotter.clear()
-        self.plotter.add_mesh(
-            self.mesh,
-            scalars="Property ID",
-            show_edges=True,
-            cmap=cmap,
-            show_scalar_bar=False,  # Usually helpful to see PID values
-        )
-        
         self.plotter.reset_camera()
         self.plotter.render()
-
 
     def reset_view(self):
         """Reset the camera view"""
@@ -618,5 +666,3 @@ class PyVistaMeshPlotter(QFrame):
         # Plot the dataset
         self.has_rendered = True
         print(f"Plotting: {random_example}")
-
-    
